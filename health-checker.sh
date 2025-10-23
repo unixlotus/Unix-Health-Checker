@@ -70,7 +70,7 @@ check_load_average() {
 check_memory_usage() {
     local mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
-    local mem_cached=$(grep Cached /proc/meminfo | awk '{print $2}')
+    local mem_cached=$(grep '^Cached' /proc/meminfo | awk '{print $2}')
     local mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
     local mem_used=$((mem_total - mem_free - mem_cached - mem_buffers))
     local mem_used_percent=$(( (mem_used * 10000) / mem_total ))
