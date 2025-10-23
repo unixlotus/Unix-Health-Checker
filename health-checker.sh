@@ -1,27 +1,26 @@
 #!/bin/sh
 
 # ============================================================================
-# Health Checker Script for Unix Systems (Portable Version)
+# Health Checker Script
 # Author: Li Yuxin
-# Purpose: Monitor key system health metrics and log to standard Unix locations
-# Version: 1.1 (Portable, no bc, no logger, works in dash/sh)
-# Run via cron: */5 * * * * /usr/local/bin/health-checker.sh
+# Purpose: Monitor system health and output to stdout for piping
+# Version: 1.3
+# Run via: curl -s https://raw.githubusercontent.com/unixlotus/Unix-Health-Checker/refs/heads/main/health-checker.sh | sudo bash
 # ============================================================================
 
 # Configuration
 LOG_DIR="/var/log/health-checker"
 REPORT_DIR="$LOG_DIR/reports"
 TMP_DIR="$LOG_DIR/tmp"
-LOG_FILE="$LOG_DIR/health-checker.log"
 MAX_LOG_AGE_DAYS=7
 DATE=$(date '+%Y-%m-%d %H:%M:%S')
 TIMESTAMP=$(date '+%s')
 HOSTNAME=$(hostname -f)
 IP_ADDR=$(hostname -I | awk '{print $1}')
 
-# Ensure log directories exist
-mkdir -p "$LOG_DIR" "$REPORT_DIR" "$TMP_DIR" || {
-    echo "ERROR: Cannot create log directories. Check permissions." >&2
+# Ensure directories exist
+mkdir -p "$LOG_DIR" "$REPORT_DIR" "$TMP_DIR" 2>/dev/null || {
+    echo "ERROR: Cannot create log directories." >&2
     exit 1
 }
 
@@ -29,23 +28,14 @@ mkdir -p "$LOG_DIR" "$REPORT_DIR" "$TMP_DIR" || {
 chown root:root "$LOG_DIR" "$REPORT_DIR" "$TMP_DIR" 2>/dev/null || true
 chmod 755 "$LOG_DIR" "$REPORT_DIR" "$TMP_DIR" 2>/dev/null || true
 
-# Ensure log file is writable
-touch "$LOG_FILE" 2>/dev/null || {
-    echo "ERROR: Cannot write to log file $LOG_FILE" >&2
-    exit 1
-}
-chown root:root "$LOG_FILE" 2>/dev/null || true
-chmod 644 "$LOG_FILE" 2>/dev/null || true
-
-# Function: Log message with timestamp
+# Function: Log to stdout (for piping)
 log_message() {
     local level="$1"
     local message="$2"
-    local formatted_msg="$DATE | $HOSTNAME | $level | $message"
-    echo "$formatted_msg" | tee -a "$LOG_FILE" > /dev/null
+    echo "$DATE | $HOSTNAME | $level | $message" >&1
 }
 
-# Function: Check if disk usage exceeds threshold (default 90%)
+# Function: Check if disk usage exceeds threshold
 check_disk_usage() {
     local mount_point="$1"
     local threshold="${2:-90}"
@@ -59,16 +49,15 @@ check_disk_usage() {
     fi
 }
 
-# Function: Check CPU load average (1, 5, 15 min)
+# Function: Check CPU load (no bc)
 check_load_average() {
     local load1=$(cat /proc/loadavg | awk '{print $1}')
     local load5=$(cat /proc/loadavg | awk '{print $2}')
     local load15=$(cat /proc/loadavg | awk '{print $3}')
     local cpu_count=$(nproc 2>/dev/null || echo 1)
     local threshold=$(echo "$cpu_count * 1.0" | awk '{print int($1*100)/100}')
-    # Use pure Bash for comparison (integer scaling)
-    local load1_int=$(echo "$load1 * 100" | bc -l 2>/dev/null || echo "$load1 * 100" | awk '{print int($1)}')
-    local threshold_int=$(echo "$threshold * 100" | bc -l 2>/dev/null || echo "$threshold * 100" | awk '{print int($1)}')
+    local load1_int=$(echo "$load1 * 100" | awk '{print int($1)}')
+    local threshold_int=$(echo "$threshold * 100" | awk '{print int($1)}')
     if [ "$load1_int" -gt "$threshold_int" ]; then
         log_message "WARNING" "High load average (1min): $load1 (threshold: $threshold)"
         echo "LOAD_HIGH|1min=$load1|5min=$load5|15min=$load15|cpu_count=$cpu_count"
@@ -77,29 +66,24 @@ check_load_average() {
     fi
 }
 
-# Function: Check memory usage (Bash-only, no bc)
+# Function: Check memory usage (no bc)
 check_memory_usage() {
     local mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
-    local mem_available=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
     local mem_cached=$(grep Cached /proc/meminfo | awk '{print $2}')
     local mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
     local mem_used=$((mem_total - mem_free - mem_cached - mem_buffers))
-    # Scale to 2 decimals using integer arithmetic
     local mem_used_percent=$(( (mem_used * 10000) / mem_total ))
     local mem_used_percent_float=$(printf "%.2f" $((mem_used_percent / 100.0)))
-    local mem_available_percent=$(( (mem_available * 10000) / mem_total ))
-    local mem_available_percent_float=$(printf "%.2f" $((mem_available_percent / 100.0)))
-
-    if [ "$(echo "$mem_used_percent_float > 85.00" | bc -l 2>/dev/null || echo "$mem_used_percent_float > 85.00")" = "1" ]; then
+    if [ "$(echo "$mem_used_percent_float > 85.00" | awk '{print $1>85.00}') " = "1" ]; then
         log_message "WARNING" "High memory usage: $mem_used_percent_float%"
-        echo "MEMORY_HIGH|used=$mem_used_percent_float%|available=$mem_available_percent_float%"
+        echo "MEMORY_HIGH|used=$mem_used_percent_float%|available=$mem_used_percent_float%"
     else
-        echo "MEMORY_OK|used=$mem_used_percent_float%|available=$mem_available_percent_float%"
+        echo "MEMORY_OK|used=$mem_used_percent_float%|available=$mem_used_percent_float%"
     fi
 }
 
-# Function: Check number of running processes
+# Function: Check process count
 check_process_count() {
     local process_count=$(ps aux | wc -l)
     local threshold=200
@@ -111,7 +95,7 @@ check_process_count() {
     fi
 }
 
-# Function: Check network interface status
+# Function: Check network
 check_network_status() {
     local interfaces=$(ip -o link show | awk -F': ' '{print $2}' | grep -v 'lo' | grep -v 'docker' | grep -v 'br-' | grep -v 'veth')
     local failures=0
@@ -129,7 +113,7 @@ check_network_status() {
     fi
 }
 
-# Function: Check if critical services are running
+# Function: Check services
 check_services() {
     local services="sshd cron systemd-logind"
     local failed=0
@@ -147,7 +131,7 @@ check_services() {
     fi
 }
 
-# Function: Generate a JSON report (no bc)
+# Function: Generate JSON report
 generate_report() {
     local report_file="$REPORT_DIR/health-report-$(date '+%Y-%m-%d').json"
     local temp_json=$(mktemp)
@@ -163,11 +147,10 @@ generate_report() {
     "cpu_load_15min": "$(awk '{print $3}' /proc/loadavg)",
     "cpu_cores": "$(nproc 2>/dev/null || echo 1)",
     "memory_total_kb": "$(grep MemTotal /proc/meminfo | awk '{print $2}')",
-    "memory_used_percent": "$(grep MemUsed /proc/meminfo | awk '{print $2}')",
+    "memory_used_percent": "$(printf "%.2f" $(( ( $(grep MemUsed /proc/meminfo | awk '{print $2}') * 10000 ) / $(grep MemTotal /proc/meminfo | awk '{print $2}') / 100.0 )))",
     "disk_usage": {
 EOF
 
-    # Add disk usage per mount point
     df -h | tail -n +2 | while read dev mount size used avail usep mountpoint; do
         if [ "$mountpoint" != "tmpfs" ] && [ "$mountpoint" != "devtmpfs" ]; then
             echo "    \"${mountpoint}\": {"
@@ -179,20 +162,18 @@ EOF
         fi
     done >> "$temp_json"
 
-    # Close JSON
     sed -i '$s/,$//' "$temp_json"
     echo "  }"
     echo "}"
     echo "}" >> "$temp_json"
 
-    # Move to final location
     mv "$temp_json" "$report_file"
     chown root:root "$report_file" 2>/dev/null || true
     chmod 644 "$report_file" 2>/dev/null || true
     log_message "INFO" "Generated health report: $report_file"
 }
 
-# Function: Clean old logs
+# Function: Cleanup old logs
 cleanup_old_logs() {
     local cutoff=$(date -d "-$MAX_LOG_AGE_DAYS days" +%Y-%m-%d)
     if [ -f "$LOG_DIR/health-checker.log" ]; then
@@ -216,7 +197,7 @@ main() {
     results+=("Network: $(check_network_status)")
     results+=("Services: $(check_services)")
 
-    # Log results
+    # Output results
     for result in "${results[@]}"; do
         case "$result" in
             *WARNING*|*ERROR*) log_message "WARNING" "$result" ;;
@@ -228,7 +209,7 @@ main() {
     # Generate report
     generate_report
 
-    # Clean up old logs
+    # Clean up
     cleanup_old_logs
 
     log_message "INFO" "Health check completed successfully"
