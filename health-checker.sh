@@ -147,7 +147,6 @@ generate_report() {
     "cpu_load_15min": "$(awk '{print $3}' /proc/loadavg)",
     "cpu_cores": "$(nproc 2>/dev/null || echo 1)",
     "memory_total_kb": "$(grep MemTotal /proc/meminfo | awk '{print $2}')",
-    "memory_used_percent": "$(printf "%.2f" $(( ( $(grep MemUsed /proc/meminfo | awk '{print $2}') * 10000 ) / $(grep MemTotal /proc/meminfo | awk '{print $2}') / 100.0 )))",
     "disk_usage": {
 EOF
 
